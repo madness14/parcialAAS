@@ -1,0 +1,74 @@
+- hosts: db
+  become: true
+  vars:
+    ansible_python_interpreter: /usr/bin/python3
+    mysql_socket: /run/mysqld/mysqld.sock
+
+  tasks:
+    - name: actualizar repositorio apt
+      apt:
+        update_cache: yes
+
+    - name: instalar dependencias mysql para ansible
+      apt:
+        name:
+          - python3-pymysql
+        state: present
+        update_cache: yes
+
+    - name: instalar mariadb y snmp
+      apt:
+        name:
+          - mariadb-server
+          - snmpd
+        state: present
+
+    - name: eliminar root remoto en mariadb
+      mysql_user:
+        name: root
+        host: '%'
+        state: absent
+        login_unix_socket: "{{ mysql_socket }}"
+
+    - name: asegura usuario root local sin contrasena
+      mysql_user:
+        name: root
+        host: localhost
+        password: ""
+        state: present
+        login_unix_socket: "{{ mysql_socket }}"
+
+    - name: crear base de datos para wordpress
+      mysql_db:
+        name: wordpress
+        state: present
+        login_unix_socket: "{{ mysql_socket }}"
+
+    - name: crear usuario wp_user para wordpress
+      mysql_user:
+        name: wp_user
+        host: '%'
+        password: wp_pass
+        priv: 'wordpress.*:ALL'
+        state: present
+        login_unix_socket: "{{ mysql_socket }}"
+
+    - name: configurar bind-address para solo local
+      lineinfile:
+        path: /etc/mysql/mariadb.conf.d/50-server.cnf
+        regexp: '^bind-address'
+        line: 'bind-address = 127.0.0.1'
+      notify: reiniciar mariadb
+
+    - name: iniciar snmp
+      service:
+        name: snmpd
+        state: started
+        enabled: yes
+
+  handlers:
+    - name: reiniciar mariadb
+      service:
+        name: mariadb
+        state: restarted
+
