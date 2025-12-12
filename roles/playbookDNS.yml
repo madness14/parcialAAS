@@ -1,0 +1,70 @@
+- hosts: dns
+  become: true
+  tasks:
+
+    - name: Actualizar apt
+      apt:
+        update_cache: yes
+
+    - name: Instalar dnsmasq
+      apt:
+        name: dnsmasq
+        state: present
+
+    - name: configurar /etc/dnsmasq.conf
+      copy:
+        dest: /etc/dnsmasq.conf
+        content: |
+          port=53
+          interface=eth1
+          listen-address=127.0.0.1,192.168.56.103
+
+          domain-needed
+          bogus-priv
+          expand-hosts
+          no-resolv
+          bind-interfaces
+
+          server=1.1.1.1
+          server=8.8.8.8
+
+          domain=patitohosting.licic
+          local=/patitohosting.licic/
+
+          address=/www.patitohosting.licic/192.168.56.101
+          address=/db.patitohosting.licic/192.168.56.102
+          address=/ns.patitohosting.licic/192.168.56.103
+          address=/email.patitohosting.licic/192.168.56.104
+          address=/ldap.patitohosting.licic/192.168.56.105
+
+          cache-size=1000
+          dhcp-range=192.168.56.80,192.168.56.150,12h
+          dhcp-leasefile=/var/lib/misc/dnsmasq.leases
+          dhcp-authoritative
+      notify: restart dnsmasq
+
+    - name: el etc hosts
+      copy:
+        dest: /etc/hosts
+        content: |
+          127.0.0.1   localhost
+          192.168.56.101  www.patitohosting.licic
+          192.168.56.102  db.patitohosting.licic
+          192.168.56.103  ns.patitohosting.licic
+          192.168.56.104  email.patitohosting.licic
+          192.168.56.105  ldap.patitohosting.licic
+
+    - name: resolv.conf de dns
+      copy:
+        dest: /etc/resolv.conf
+        content: |
+          search patitohosting.licic
+          nameserver 127.0.0.1
+          nameserver 1.1.1.1
+
+  handlers:
+    - name: restart dnsmasq
+      service:
+        name: dnsmasq
+        state: restarted
+
