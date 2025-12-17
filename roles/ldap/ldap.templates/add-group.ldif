@@ -1,0 +1,8 @@
+dn: cn=licic,ou=Groups,dc=patitohosting,dc=licic
+objectClass: posixGroup
+cn: licic
+gidNumber: 5000
+memberUid: admin
+memberUid: ander
+memberUid: lalo
+

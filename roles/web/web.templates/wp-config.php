@@ -1,0 +1,11 @@
+define('LDAP_AUTH_SERVER', 'ldap.patitohosting.licic');
+define('LDAP_AUTH_PORT', 389);
+define('LDAP_AUTH_BASEDN', 'dc=patitohosting,dc=licic');
+define('LDAP_AUTH_FILTER', '(&(objectClass=person)(uid=%s))');
+define('LDAP_AUTH_ATTRIB_UID', 'uid');
+define('LDAP_AUTH_ATTRIB_MAIL', 'mail');
+define('LDAP_AUTH_ATTRIB_NAME', 'displayName');
+define('LDAP_AUTH_SEARCHDN', 'cn=admin,dc=patitohosting,dc=licic');
+define('LDAP_AUTH_SEARCHPW', 'Bl4ck-Kn1fe');
+define('LDAP_AUTH_ALLOW_USER', '1');
+define('LDAP_AUTH_USER', '1');``

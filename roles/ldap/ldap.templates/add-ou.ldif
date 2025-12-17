@@ -1,0 +1,7 @@
+dn: ou=People,dc=patitohosting,dc=licic
+objectClass: organizationalUnit
+ou: People
+
+dn: ou=Groups,dc=patitohosting,dc=licic
+objectClass: organizationalUnit
+ou: Groups

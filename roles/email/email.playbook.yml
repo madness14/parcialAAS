@@ -1,0 +1,405 @@
+- hosts: email
+  become: true
+  tasks:
+    - name: actualizar repositorio apt
+      apt:
+        update_cache: yes
+
+    - name: instalar postfix, dovecot, clamav, spamassassin, snmp
+      apt:
+        name:
+          - postfix
+          - dovecot-core
+          - dovecot-ldap
+          - dovecot-imapd
+          - dovecot-pop3d
+          - clamav
+          - spamassassin
+          - snmpd
+          - vim
+        state: present
+
+    - name: instalar apache2 y dependencias php para rainloop
+      apt:
+        name:
+          - apache2
+          - libapache2-mod-php
+          - php
+          - php-curl
+          - php-xml
+          - php-json
+          - php-zip
+          - php-sqlite3
+          - php-mbstring
+          - php-ldap
+          - unzip
+        state: present
+
+    - name: configurar dns
+      copy:
+        dest: /etc/resolv.conf
+        content: |
+          search patitohosting.licic
+          nameserver 192.168.56.103
+          nameserver 8.8.8.8
+
+    - name: configurar postfix
+      debconf:
+        name: postfix
+        question: postfix/main_mailer_type
+        value: "Internet Site"
+        vtype: select
+
+    - name: configurar postfix
+      debconf:
+        name: postfix
+        question: postfix/mailname
+        value: patitohosting.licic
+        vtype: string
+
+    - name: reiniciar postfix
+      service:
+        name: postfix
+        state: restarted
+
+    # Modificar: usar un certificado común para ambos servicios
+    - name: generar certificado ssl para correo y rainloop
+      command: openssl req -new -x509 -days 365 -nodes -out /etc/ssl/certs/email.patitohosting.licic.crt -keyout /etc/ssl/private/email.patitohosting.licic.key -subj "/C=MX/ST=Denial/L=Xalapa/O=Dis/CN=email.patitohosting.licic"
+      args:
+        creates: /etc/ssl/certs/email.patitohosting.licic.crt
+
+    - name: configurar postfix tls y sasl en main.cf
+      blockinfile:
+        path: /etc/postfix/main.cf
+        block: |
+          myhostname = email.patitohosting.licic
+          mydomain = patitohosting.licic
+          myorigin = /etc/mailname
+          smtpd_sasl_type = dovecot
+          smtpd_sasl_path = private/auth
+          smtpd_sasl_auth_enable = yes
+          smtpd_tls_cert_file = /etc/ssl/certs/email.patitohosting.licic.crt
+          smtpd_tls_key_file = /etc/ssl/private/email.patitohosting.licic.key
+          smtpd_use_tls = yes
+          smtpd_tls_security_level = may
+
+    - name: configurar dovecot (imap, pop3 con ssl)
+      blockinfile:
+        path: /etc/dovecot/dovecot.conf
+        block: |
+          protocols = imap pop3
+          ssl = required
+          ssl_cert = </etc/ssl/certs/email.patitohosting.licic.crt
+          ssl_key = </etc/ssl/private/email.patitohosting.licic.key
+      notify: reiniciar dovecot
+
+    - name: habilitar autenticacion ldap en dovecot
+      lineinfile:
+        path: /etc/dovecot/conf.d/10-auth.conf
+        regexp: '^#!include auth-ldap.conf.ext'
+        line: '!include auth-ldap.conf.ext'
+      notify: reiniciar dovecot
+
+    - name: crear auth-ldap.conf.ext
+      copy:
+        dest: /etc/dovecot/conf.d/auth-ldap.conf.ext
+        content: |
+          passdb {
+            driver = ldap
+            args = /etc/dovecot/dovecot-ldap.conf.ext
+          }
+
+          userdb {
+            driver = ldap
+            args = /etc/dovecot/dovecot-ldap.conf.ext
+          }
+      notify: reiniciar dovecot
+
+    - name: crear dovecot-ldap.conf.ext (config real LDAP)
+      copy:
+        dest: /etc/dovecot/dovecot-ldap.conf.ext
+        mode: '0640'
+        owner: root
+        group: dovecot
+        content: |
+          hosts = ldap.patitohosting.licic
+          ldap_version = 3
+          base = dc=patitohosting,dc=licic
+
+          auth_bind = yes
+          dn = administrator@PATITOHOSTING.LICIC
+          dnpass = OkeGom333!
+
+          user_filter = (&(objectClass=person)(sAMAccountName=%u))
+          pass_filter = (&(objectClass=person)(sAMAccountName=%u))
+
+          dnpass_attr = userPassword
+      notify: reiniciar dovecot
+
+    - name: configurar socket sasl para postfix en dovecot
+      blockinfile:
+        path: /etc/dovecot/conf.d/10-master.conf
+        insertafter: 'service imap-login {'
+        block: |
+          unix_listener /var/spool/postfix/private/auth {
+            mode = 0666
+            user = postfix
+            group = postfix
+          }
+      notify: reiniciar dovecot
+
+    - name: habilitar spamassassin (spamd)
+      systemd:
+        name: spamd
+        enabled: yes
+        state: started
+
+    - name: reiniciar spamassassin
+      service:
+        name: spamd
+        state: restarted
+
+    - name: habilitar módulos apache necesarios
+      command: a2enmod {{ item }}
+      with_items:
+        - ssl
+        - rewrite
+        - headers
+      notify: reiniciar apache
+
+    - name: crear directorio para rainloop
+      file:
+        path: /var/www/html/rainloop
+        state: directory
+        mode: '0755'
+
+    - name: descargar rainloop
+      get_url:
+        url: https://github.com/RainLoop/rainloop-webmail/releases/download/v1.17.0/rainloop-legacy-1.17.0.zip
+        dest: /tmp/rainloop.zip
+
+    - name: descomprimir rainloop
+      unarchive:
+        src: /tmp/rainloop.zip
+        dest: /var/www/html/
+        remote_src: yes
+        creates: /var/www/html/rainloop/index.php
+
+    - name: asignar permisos a rainloop
+      file:
+        path: /var/www/html/rainloop
+        owner: www-data
+        group: www-data
+        recurse: yes
+        mode: '0755'
+
+    - name: configurar directorio data de rainloop
+      file:
+        path: /var/www/html/rainloop/data
+        state: directory
+        owner: www-data
+        group: www-data
+        mode: '0775'
+
+    - name: crear virtualhost apache para rainloop (HTTP)
+      copy:
+        content: |
+          <VirtualHost *:80>
+            ServerName email.patitohosting.licic
+            DocumentRoot /var/www/html/rainloop
+            DirectoryIndex index.php
+            
+            <Directory /var/www/html/rainloop>
+              Options -Indexes +FollowSymLinks
+              AllowOverride All
+              Require all granted
+              
+              # Reglas para RainLoop
+              <IfModule mod_rewrite.c>
+                RewriteEngine On
+                RewriteCond %{REQUEST_FILENAME} !-f
+                RewriteCond %{REQUEST_FILENAME} !-d
+                RewriteRule ^.*$ index.php [PT,L]
+              </IfModule>
+            </Directory>
+            
+            ErrorLog ${APACHE_LOG_DIR}/rainloop_error.log
+            CustomLog ${APACHE_LOG_DIR}/rainloop_access.log combined
+          </VirtualHost>
+        dest: /etc/apache2/sites-available/rainloop.conf
+
+    - name: crear virtualhost apache para rainloop (HTTPS)
+      copy:
+        content: |
+          <IfModule mod_ssl.c>
+          <VirtualHost *:443>
+            ServerName email.patitohosting.licic
+            DocumentRoot /var/www/html/rainloop
+            DirectoryIndex index.php
+            
+            <Directory /var/www/html/rainloop>
+              Options -Indexes +FollowSymLinks
+              AllowOverride All
+              Require all granted
+              
+              # Reglas para RainLoop
+              <IfModule mod_rewrite.c>
+                RewriteEngine On
+                RewriteCond %{REQUEST_FILENAME} !-f
+                RewriteCond %{REQUEST_FILENAME} !-d
+                RewriteRule ^.*$ index.php [PT,L]
+              </IfModule>
+            </Directory>
+            
+            SSLEngine on
+            SSLCertificateFile /etc/ssl/certs/email.patitohosting.licic.crt
+            SSLCertificateKeyFile /etc/ssl/private/email.patitohosting.licic.key
+            
+            # Forzar HTTPS para login y administración
+            <IfModule mod_headers.c>
+              Header always set Strict-Transport-Security "max-age=31536000; includeSubDomains"
+            </IfModule>
+            
+            ErrorLog ${APACHE_LOG_DIR}/rainloop_ssl_error.log
+            CustomLog ${APACHE_LOG_DIR}/rainloop_ssl_access.log combined
+          </VirtualHost>
+          </IfModule>
+        dest: /etc/apache2/sites-available/rainloop-ssl.conf
+
+    - name: habilitar virtualhost rainloop
+      command: a2ensite rainloop.conf
+      args:
+        creates: /etc/apache2/sites-enabled/rainloop.conf
+
+    - name: habilitar virtualhost rainloop ssl
+      command: a2ensite rainloop-ssl.conf
+      args:
+        creates: /etc/apache2/sites-enabled/rainloop-ssl.conf
+
+    - name: deshabilitar virtualhost por defecto
+      command: a2dissite 000-default.conf
+      ignore_errors: yes
+
+    # Configuración automática de RainLoop
+    - name: crear directorio de configuración rainloop
+      file:
+        path: /var/www/html/rainloop/data/_data_/_default_/configs
+        state: directory
+        owner: www-data
+        group: www-data
+        mode: '0755'
+
+    - name: configurar rainloop para ldap y servidor local
+      copy:
+        dest: /var/www/html/rainloop/data/_data_/_default_/configs/application.ini
+        content: |
+          [webmail]
+          title = "WebMail PatitoHosting"
+          theme = "Default"
+          language = "es"
+          allow_languages_on_settings = On
+          loading_description = "PatitoHosting Mail"
+          
+          [login]
+          default_domain = "patitohosting.licic"
+          determine_user_domain = On
+          allow_languages_on_login = On
+          
+          [imap]
+          host = "localhost"
+          port = 993
+          secure = "SSL"
+          short_login = Off
+          use_auth = On
+          
+          [smtp]
+          host = "localhost"
+          port = 587
+          secure = "TLS"
+          short_login = Off
+          use_auth = On
+          auth_type = "2"  # 2 = Autenticación normal
+          set_sender = On
+          
+          [ldap]
+          host = "ldap.patitohosting.licic"
+          port = 389
+          ssl = Off
+          bind_dn = "administrator@PATITOHOSTING.LICIC"
+          bind_pass = "OkeGom333!"
+          base_dn = "dc=patitohosting,dc=licic"
+          user_filter = "(&(objectClass=person)(sAMAccountName=%EMAILADDRESS%))"
+          allow_list = On
+          allow_search = On
+          
+          [contacts]
+          enable = On
+          allow_sharing = On
+          sync = Off
+          type = "sqlite"
+          pdo_dsn = "sqlite:{{ rainloop_path }}/data/_data_/_default_/contacts.db"
+          
+          [branding]
+          login_logo = ""
+          login_background = ""
+          login_desc = ""
+          login_css = ""
+          login_powered = On
+          login_powered_url = "https://patitohosting.licic"
+          
+          [security]
+          openpgp = Off
+          csrf_protection = On
+          x_frame_options_header = "SAMEORIGIN"
+          
+          [capa]
+          attach_size_limit = 50
+          
+          [logs]
+          enable = On
+          write_on_php_error = On
+          write_on_time = Off
+        owner: www-data
+        group: www-data
+        mode: '0640'
+
+    - name: configurar php para rainloop
+      lineinfile:
+        path: /etc/php/7.4/apache2/php.ini
+        regexp: "^{{ item.key }}"
+        line: "{{ item.key }} = {{ item.value }}"
+      with_items:
+        - { key: "upload_max_filesize", value: "50M" }
+        - { key: "post_max_size", value: "55M" }
+        - { key: "memory_limit", value: "256M" }
+        - { key: "max_execution_time", value: "300" }
+        - { key: "max_input_time", value: "300" }
+      notify: reiniciar apache
+
+    # Redirección HTTP -> HTTPS
+    - name: configurar redirección http a https
+      copy:
+        dest: /etc/apache2/conf-available/redirect-https.conf
+        content: |
+          <IfModule mod_rewrite.c>
+            RewriteEngine On
+            RewriteCond %{HTTPS} off
+            RewriteRule ^ https://%{HTTP_HOST}%{REQUEST_URI} [R=301,L]
+          </IfModule>
+      notify: reiniciar apache
+
+    - name: habilitar redirección https
+      command: a2enconf redirect-https
+      args:
+        creates: /etc/apache2/conf-enabled/redirect-https.conf
+
+  handlers:
+    - name: reiniciar dovecot
+      service:
+        name: dovecot
+        state: restarted
+
+    - name: reiniciar apache
+      service:
+        name: apache2
+        state: restarted

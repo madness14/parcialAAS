@@ -1,0 +1,79 @@
+- hosts: db
+  become: true
+  vars:
+    ansible_python_interpreter: /usr/bin/python3
+    mysql_socket: /run/mysqld/mysqld.sock
+
+  tasks:
+    - name: actualizar apt
+      apt:
+        update_cache: yes
+
+    - name: instalar mariadb y snmp
+      apt:
+        name:
+          - python3-pymysql
+          - mariadb-server
+          - snmpd
+          - vim
+        state: present
+
+    - name: configurar dns
+      template:
+        src: db.templates/resolv.conf
+        dest: /etc/resolv.conf
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: eliminar root remoto en mariadb
+      mysql_user:
+        name: root
+        host: '%'
+        state: absent
+        login_unix_socket: "{{ mysql_socket }}"
+
+    - name: asegura usuario root local
+      mysql_user:
+        name: root
+        host: localhost
+        password: ""
+        state: present
+        login_unix_socket: "{{ mysql_socket }}"
+
+    - name: crear base de datos para wordpress
+      mysql_db:
+        name: wordpress
+        state: present
+        login_unix_socket: "{{ mysql_socket }}"
+
+    - name: crear usuario para wordpress
+      mysql_user:
+        name: wordpress-user
+        host: '%'
+        password: "Bl4ck-Kn1fe" 
+        priv: 'wordpress.*:ALL'
+        state: present
+        login_unix_socket: "{{ mysql_socket }}"
+
+    - name: copiar 50-server.cnf 
+      template:
+        src: db.templates/50-server.cnf
+        dest: /etc/mysql/mariadb.conf.d/50-server.cnf
+        owner: root
+        group: root
+        mode: '0644'
+      notify: reiniciar mariadb
+
+    - name: iniciar snmp
+      service:
+        name: snmpd
+        state: started
+        enabled: yes
+
+  handlers:
+    - name: reiniciar mariadb
+      service:
+        name: mariadb
+        state: restarted
+

@@ -1,0 +1,272 @@
+- hosts: ldap
+  become: true
+
+  vars:
+    ldap_domain: patitohosting.licic
+    ldap_org: "Organizacion LICIC"
+    ldap_admin_password: "Bl4ck-Kn1fe"
+    ldap_base_dn: "dc=patitohosting,dc=licic"
+
+  tasks:
+    - name: actualizar repositorio apt
+      apt:
+        update_cache: yes
+
+    - name: instalar slapd de manera no interactiva
+      apt:
+        name: slapd
+        state: present
+      environment:
+        DEBIAN_FRONTEND: noninteractive
+
+    - name: instalar dependencias adicionales
+      apt:
+        name:
+          - ldap-utils
+          - vim
+        state: present
+
+    - name: Detener slapd para configurar
+      service:
+        name: slapd
+        state: stopped
+
+    - name: Eliminar configuración existente
+      shell: |
+        rm -rf /etc/ldap/slapd.d/*
+        rm -rf /var/lib/ldap/*
+      when: false 
+
+    - name: crear configuracion slapd.conf manualmente
+      copy:
+        dest: /etc/ldap/slapd.conf
+        content: |
+          # slapd.conf
+          include         /etc/ldap/schema/core.schema
+          include         /etc/ldap/schema/cosine.schema
+          include         /etc/ldap/schema/inetorgperson.schema
+          
+          pidfile         /var/run/slapd/slapd.pid
+          argsfile        /var/run/slapd/slapd.args
+          
+          modulepath      /usr/lib/ldap
+          moduleload      back_mdb
+          
+          database        mdb
+          maxsize         1073741824
+          suffix          "{{ ldap_base_dn }}"
+          rootdn          "cn=admin,{{ ldap_base_dn }}"
+          rootpw          {{ ldap_admin_password }}
+          
+          directory       /var/lib/ldap
+          
+          index objectClass eq
+        mode: '0640'
+
+    - name: Crear archivo de configuración LDIF para slapd.d
+      copy:
+        dest: /tmp/slapd_config.ldif
+        content: |
+          dn: cn=config
+          changetype: modify
+          replace: olcLogLevel
+          olcLogLevel: none
+          
+          dn: olcDatabase={1}mdb,cn=config
+          changetype: modify
+          replace: olcSuffix
+          olcSuffix: {{ ldap_base_dn }}
+          
+          dn: olcDatabase={1}mdb,cn=config
+          changetype: modify
+          replace: olcRootDN
+          olcRootDN: cn=admin,{{ ldap_base_dn }}
+          
+          dn: olcDatabase={1}mdb,cn=config
+          changetype: modify
+          replace: olcRootPW
+          olcRootPW: {{ ldap_admin_password }}
+          
+          dn: olcDatabase={1}mdb,cn=config
+          changetype: modify
+          replace: olcDbDirectory
+          olcDbDirectory: /var/lib/ldap
+          
+          dn: olcDatabase={1}mdb,cn=config
+          changetype: modify
+          replace: olcDbIndex
+          olcDbIndex: objectClass eq
+
+    - name: Iniciar slapd sin configuración
+      service:
+        name: slapd
+        state: started
+
+    - name: Configurar slapd usando ldapmodify
+      command: >
+        ldapmodify -Y EXTERNAL -H ldapi:/// -f /tmp/slapd_config.ldif
+      register: slapd_config
+      failed_when: slapd_config.rc != 0
+      changed_when: true
+
+    - name: Reiniciar slapd para aplicar cambios
+      service:
+        name: slapd
+        state: restarted
+
+    - name: Esperar que slapd esté listo
+      wait_for:
+        port: 389
+        delay: 5
+        timeout: 60
+
+    - name: Verificar que podemos autenticarnos
+      command: >
+        ldapwhoami -x -H ldap://localhost -D "cn=admin,{{ ldap_base_dn }}" -w "{{ ldap_admin_password }}"
+      register: auth_test
+      changed_when: false
+
+    - name: Fallback - Configurar manualmente si autenticación falla
+      block:
+        - name: Crear archivo de configuración inicial
+          copy:
+            dest: /tmp/base.ldif
+            content: |
+              dn: {{ ldap_base_dn }}
+              objectClass: top
+              objectClass: dcObject
+              objectClass: organization
+              o: {{ ldap_org }}
+              dc: patitohosting
+              
+              dn: cn=admin,{{ ldap_base_dn }}
+              objectClass: simpleSecurityObject
+              objectClass: organizationalRole
+              cn: admin
+              description: LDAP Administrator
+              userPassword: {{ ldap_admin_password }}
+
+        - name: Aplicar configuración base usando slapadd
+          command: >
+            slapadd -l /tmp/base.ldif
+          when: false  
+
+      when: auth_test.rc != 0
+
+    - name: Copiar add-ou.ldif al servidor
+      copy:
+        src: ldap.templates/add-ou.ldif
+        dest: /tmp/add-ou.ldif
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Aplicar OUs LDAP (con reintentos)
+      command: >
+        ldapadd -x -H ldap://localhost 
+        -D "cn=admin,{{ ldap_base_dn }}" 
+        -w "{{ ldap_admin_password }}" 
+        -f /tmp/add-ou.ldif
+      register: add_ou
+      retries: 3
+      delay: 5
+      until: add_ou.rc in [0, 68]
+      changed_when: add_ou.rc == 0
+
+    - name: Mostrar error si falla
+      debug:
+        msg: "Error aplicando OUs: {{ add_ou.stderr }}"
+      when: add_ou.rc not in [0, 68]
+
+    - name: Copiar add-users.ldif al servidor
+      copy:
+        src: ldap.templates/add-users.ldif
+        dest: /tmp/add-users.ldif
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Aplicar usuarios LDAP
+      command: >
+        ldapadd -x -H ldap://localhost 
+        -D "cn=admin,{{ ldap_base_dn }}" 
+        -w "{{ ldap_admin_password }}" 
+        -f /tmp/add-users.ldif
+      register: add_users
+      retries: 3
+      delay: 5
+      until: add_users.rc in [0, 68]
+      changed_when: add_users.rc == 0
+
+    - name: Copiar add-group.ldif al servidor
+      copy:
+        src: ldap.templates/add-group.ldif
+        dest: /tmp/add-group.ldif
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Aplicar grupo licic LDAP
+      command: >
+        ldapadd -x -H ldap://localhost 
+        -D "cn=admin,{{ ldap_base_dn }}" 
+        -w "{{ ldap_admin_password }}" 
+        -f /tmp/add-group.ldif
+      register: add_group
+      retries: 3
+      delay: 5
+      until: add_group.rc in [0, 68]
+      changed_when: add_group.rc == 0
+
+    - name: Verificar contenido LDAP
+      command: >
+        ldapsearch -x -H ldap://localhost 
+        -b "{{ ldap_base_dn }}" 
+        -D "cn=admin,{{ ldap_base_dn }}" 
+        -w "{{ ldap_admin_password }}" 
+        "(objectclass=*)"
+      register: ldap_content
+      changed_when: false
+
+    - name: configurar slapd para aceptar conexiones remotas
+      copy:
+        dest: /tmp/allow_remote.ldif
+        content: |
+          dn: cn=config
+          changetype: modify
+          replace: olcDisallows
+          olcDisallows: bind_anon
+          dn: cn=config
+          changetype: modify
+          replace: olcAllows
+          olcAllows: bind_v2
+          dn: cn=config
+          changetype: modify
+          add: olcTLSCertificateFile
+          olcTLSCertificateFile: /etc/ssl/certs/ssl-cert-snakeoil.pem
+      
+          dn: cn=config
+          changetype: modify
+          add: olcTLSCertificateKeyFile
+          olcTLSCertificateKeyFile: /etc/ssl/private/ssl-cert-snakeoil.key
+      
+          dn: cn=config
+          changetype: modify
+          add: olcTLSCipherSuite
+          olcTLSCipherSuite: HIGH:MEDIUM:+3DES:+RC4:+aNULL
+      
+          dn: cn=config
+          changetype: modify
+          add: olcTLSVerifyClient
+          olcTLSVerifyClient: never
+
+    - name: aplicar configuracion remota
+      command: >
+        ldapmodify -Y EXTERNAL -H ldapi:/// -f /tmp/allow_remote.ldif
+      register: remote_config
+      ignore_errors: yes
+
+    - name: reiniciar slapd para conexiones remotas
+      service:
+        name: slapd
+        state: restarted

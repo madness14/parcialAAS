@@ -1,0 +1,31 @@
+- hosts: dns
+  become: true
+  tasks:
+
+    - name: actualizar apt apt 
+      apt:
+        update_cache: yes
+
+    - name: instalar dnsmasq
+      apt:
+        name:
+          - dnsmasq
+          - vim
+        state: present
+        update_cache: yes
+
+    - name: copiar a playbook
+      template:
+        src: dns.templates/dnsmasq.conf
+        dest: /etc/dnsmasq.conf
+        owner: root
+        group: root
+        mode: '0644'
+      notify: restart dnsmasq
+
+  handlers:
+    - name: restart dnsmasq
+      service:
+        name: dnsmasq
+        state: restarted
+

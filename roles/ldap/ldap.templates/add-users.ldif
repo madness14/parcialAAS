@@ -1,0 +1,24 @@
+dn: uid=admin,ou=People,dc=patitohosting,dc=licic
+objectClass: inetOrgPerson
+uid: admin
+cn: Admin User
+sn: Admin
+userPassword: Bl4ck-Kn1fe
+mail: admin@email.patitohosting.licic
+
+dn: uid=ander,ou=People,dc=patitohosting,dc=licic
+objectClass: inetOrgPerson
+uid: ander
+cn: Ander User
+sn: Ander
+userPassword: okegom333
+mail: ander@email.patitohosting.licic
+
+dn: uid=lalo,ou=People,dc=patitohosting,dc=licic
+objectClass: inetOrgPerson
+uid: lalo
+cn: Lalo User
+sn: Lalo
+userPassword: catnap12
+mail: lalo@email.patitohosting.licic
+
