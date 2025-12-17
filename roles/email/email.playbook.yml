@@ -62,7 +62,6 @@
         name: postfix
         state: restarted
 
-    # Modificar: usar un certificado común para ambos servicios
     - name: generar certificado ssl para correo y rainloop
       command: openssl req -new -x509 -days 365 -nodes -out /etc/ssl/certs/email.patitohosting.licic.crt -keyout /etc/ssl/private/email.patitohosting.licic.key -subj "/C=MX/ST=Denial/L=Xalapa/O=Dis/CN=email.patitohosting.licic"
       args:
