@@ -41,7 +41,6 @@
       copy:
         dest: /etc/ldap/slapd.conf
         content: |
-          # slapd.conf
           include         /etc/ldap/schema/core.schema
           include         /etc/ldap/schema/cosine.schema
           include         /etc/ldap/schema/inetorgperson.schema
